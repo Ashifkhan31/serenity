@@ -381,6 +381,9 @@ private:
     Window(Core::EventReceiver&, WindowType);
 
     virtual void event(Core::Event&) override;
+    void redirect_keydown_event(KeyEvent const& event);
+    void redirect_keyup_event(KeyEvent const& event);
+    void handle_timer_event(Core::TimerEvent const&);
     void handle_mouse_event(MouseEvent const&);
     void handle_keydown_event(KeyEvent const&);
     void add_child_window(Window&);
@@ -469,6 +472,11 @@ private:
     bool m_should_show_window_content { true };
     WindowStack* m_window_stack { nullptr };
     RefPtr<Animation> m_animation;
+
+    int m_key_delay_ms {200};
+    intptr_t m_key_repeat_timer {0};
+    Bitmap m_pressed_keys;
+    Optional<KeyEvent> m_last_pressed_key;
 
     Optional<pid_t> m_process_id {};
 

@@ -111,6 +111,8 @@ Window::Window(ConnectionFromClient& client, WindowType window_type, WindowMode 
     , m_frame(*this)
     , m_process_id(process_id)
 {
+    m_pressed_keys = MUST(Bitmap::create(key_code_count, false));
+
     if (parent_window)
         set_parent_window(*parent_window);
     if (!is_frameless() && type() == WindowType::Normal) {
@@ -125,6 +127,7 @@ Window::~Window()
 {
     // Detach from client at the start of teardown since we don't want
     // to confuse things by trying to send messages to it.
+    if (m_key_repeat_timer) Core::EventLoop::unregister_timer(m_key_repeat_timer);
     m_client = nullptr;
 
     WindowManager::the().remove_window(*this);
@@ -444,6 +447,43 @@ void Window::set_resizable(bool resizable)
     update_window_menu_items();
 }
 
+void Window::redirect_keydown_event(KeyEvent const& event)
+{
+    bool is_key_just_pressed = !m_pressed_keys.get(event.key());
+
+    if (is_key_just_pressed) {
+
+        if (m_key_repeat_timer)
+            Core::EventLoop::unregister_timer(m_key_repeat_timer);
+
+        m_key_repeat_timer = Core::EventLoop::register_timer(*this, m_key_delay_ms, true, Core::TimerShouldFireWhenNotVisible::No);
+        m_last_pressed_key = event;
+        m_pressed_keys.set(event.key(), true);
+        handle_keydown_event(event);
+    }
+}
+
+void Window::redirect_keyup_event(KeyEvent const& event)
+{
+    m_pressed_keys.set(event.key(), false);
+    if (m_last_pressed_key.has_value() && m_last_pressed_key.value().key() == event.key()) {
+        m_last_pressed_key.clear();
+    }
+
+    m_client->async_key_up(m_window_id,
+        (u32) event.code_point(),
+        (u32) event.key(),
+        (u8) event.map_entry_index(),
+        event.modifiers(),
+        event.scancode());
+}
+
+void Window::handle_timer_event(Core::TimerEvent const&)
+{
+    if (m_last_pressed_key.has_value())
+        handle_keydown_event(m_last_pressed_key.value());
+}
+
 void Window::event(Core::Event& event)
 {
     if (is_internal()) {
@@ -469,15 +509,10 @@ void Window::event(Core::Event& event)
         m_client->async_window_left(m_window_id);
         break;
     case Event::KeyDown:
-        handle_keydown_event(static_cast<KeyEvent const&>(event));
+        redirect_keydown_event(static_cast<KeyEvent const&>(event));
         break;
     case Event::KeyUp:
-        m_client->async_key_up(m_window_id,
-            (u32) static_cast<KeyEvent const&>(event).code_point(),
-            (u32) static_cast<KeyEvent const&>(event).key(),
-            (u8) static_cast<KeyEvent const&>(event).map_entry_index(),
-            static_cast<KeyEvent const&>(event).modifiers(),
-            (u32) static_cast<KeyEvent const&>(event).scancode());
+        redirect_keyup_event(static_cast<KeyEvent const&>(event));
         break;
     case Event::WindowActivated:
         m_client->async_window_activated(m_window_id);
@@ -499,6 +534,9 @@ void Window::event(Core::Event& event)
         break;
     case Event::WindowMoved:
         m_client->async_window_moved(m_window_id, static_cast<MoveEvent const&>(event).rect());
+        break;
+    case Event::Timer:
+        handle_timer_event(static_cast<Core::TimerEvent const&>(event));
         break;
     default:
         break;
